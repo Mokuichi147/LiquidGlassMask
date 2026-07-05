@@ -142,6 +142,9 @@ final class ChromelessWindow: NSWindow {
     override func becomeKey() {
         isActuallyKey = true
         super.becomeKey()
+        // macOS が isKeyWindow 偽装のためウィンドウ順序を正しく管理しないため、
+        // キーウィンドウになった時点で明示的に手前に出す
+        orderFront(nil)
     }
 
     override func resignKey() {
