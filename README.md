@@ -60,3 +60,7 @@ xcodebuild -project LiquidGlassMask.xcodeproj -scheme LiquidGlassMaskMac \
 ```
 
 iOS 用ターゲット `LiquidGlassMask` も同じソースからビルド可能(実行には iOS 26 以降が必要)。
+
+## ライセンス
+
+[MIT License](LICENSE)
