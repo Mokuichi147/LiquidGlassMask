@@ -1,8 +1,7 @@
 import SwiftUI
-import ImageIO
-import UniformTypeIdentifiers
 
 struct ContentView: View {
+    @ObservedObject var windowState: WindowGlassState
     @ObservedObject private var state = AppState.shared
     @State private var maskPath: Path?
     @State private var maskAspect: CGFloat = 1
@@ -20,7 +19,7 @@ struct ContentView: View {
             Color.clear
 
             // 枠表示中はウィンドウ全体の範囲がわかるように薄い背景と境界線を出す
-            if state.showWindowFrame {
+            if windowState.showFrame {
                 Rectangle()
                     .fill(Color.black.opacity(0.15))
                     .overlay(
@@ -42,13 +41,8 @@ struct ContentView: View {
             // ビューが作り直されたときも現在の選択マスクを復元する
             applyCurrentMask()
         }
-        .onChange(of: state.selection) {
+        .onChange(of: windowState.selection) {
             applyCurrentMask()
-        }
-        .fileImporter(isPresented: $state.showFileImporter, allowedContentTypes: [.image]) { result in
-            guard case .success(let url) = result else { return }
-            // 形状リストへの追加・永続化・選択は AppState 側で行う
-            state.addCustomMask(from: url)
         }
     }
 
@@ -71,7 +65,7 @@ struct ContentView: View {
 
     /// 現在選択中のマスク(サンプル形状 or 追加した画像)を適用する
     private func applyCurrentMask() {
-        switch state.selection {
+        switch windowState.selection {
         case .sample(let sample):
             applyMask(sample.render())
         case .custom(let id):

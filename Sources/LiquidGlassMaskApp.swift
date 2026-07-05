@@ -1,33 +1,84 @@
 import SwiftUI
+import AppKit
+import Combine
 
 @main
 struct LiquidGlassMaskApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var state = AppState.shared
+    @State private var selectedSelection: MaskSelection
+
+    init() {
+        _selectedSelection = State(initialValue: AppState.shared.lastSelection)
+    }
+
+    /// 現在アクティブなウィンドウの選択状態を取得
+    private var activeSelection: MaskSelection {
+        state.activeWindowState?.selection ?? selectedSelection
+    }
 
     var body: some Scene {
-        // ウィンドウは AppDelegate が自前で作るため、ここではウィンドウを作らない
         Settings {
             EmptyView()
         }
         .commands {
             CommandMenu("マスク") {
-                Picker("形状", selection: $state.selection) {
-                    ForEach(SampleMask.allCases) { mask in
-                        Text(mask.rawValue).tag(MaskSelection.sample(mask))
-                    }
-                    if !state.customMasks.isEmpty {
-                        Divider()
-                        ForEach(state.customMasks) { mask in
-                            Text(mask.name).tag(MaskSelection.custom(mask.id))
+                // サンプル形状
+                ForEach(SampleMask.allCases) { mask in
+                    Button(
+                        action: {
+                            let sel = MaskSelection.sample(mask)
+                            selectedSelection = sel
+                            state.activeWindowState?.selection = sel
+                            state.noteSelectionChanged(sel)
+                        },
+                        label: {
+                            Label(
+                                mask.rawValue,
+                                systemImage: activeSelection == .sample(mask) ? "checkmark" : "circle"
+                            )
                         }
+                    )
+                }
+
+                if !state.customMasks.isEmpty {
+                    Divider()
+                    ForEach(state.customMasks) { mask in
+                        Button(
+                            action: {
+                                let sel = MaskSelection.custom(mask.id)
+                                selectedSelection = sel
+                                state.activeWindowState?.selection = sel
+                                state.noteSelectionChanged(sel)
+                            },
+                            label: {
+                                Label(
+                                    mask.name,
+                                    systemImage: activeSelection == .custom(mask.id) ? "checkmark" : "circle"
+                                )
+                            }
+                        )
                     }
                 }
+
                 Divider()
                 Button("マスク画像を追加…") {
-                    state.showFileImporter = true
+                    state.pickAndAddCustomMask()
                 }
                 .keyboardShortcut("o")
+
+                // 選択中のカスタム画像がある場合に削除ボタンを表示
+                if case .custom(let id) = activeSelection,
+                   state.customMasks.contains(where: { $0.id == id }) {
+                    Divider()
+                    Button("この画像を削除") {
+                        state.removeCustomMask(id: id)
+                        selectedSelection = .sample(.star)
+                        state.activeWindowState?.selection = .sample(.star)
+                        state.noteSelectionChanged(.sample(.star))
+                    }
+                    .foregroundStyle(.red)
+                }
             }
             CommandMenu("ガラス") {
                 Toggle("クリアガラス(高透明)", isOn: $state.useClearGlass)
@@ -46,16 +97,34 @@ struct LiquidGlassMaskApp: App {
                     Text("40%").tag(0.4)
                     Text("20%").tag(0.2)
                 }
+            }
+            CommandMenu("ウィンドウ操作") {
+                Button("新規ウィンドウ") {
+                    AppDelegate.shared?.newWindow()
+                }
+                .keyboardShortcut("n")
+                Button("ウィンドウを閉じる") {
+                    AppDelegate.shared?.closeActiveWindow()
+                }
+                .keyboardShortcut("w")
                 Divider()
-                Toggle("ウィンドウ枠を表示", isOn: $state.showWindowFrame)
+                Toggle("ウィンドウ枠を表示", isOn: frameBinding)
                 Toggle("最前面に固定", isOn: $state.alwaysOnTop)
             }
         }
     }
-}
 
-import AppKit
-import Combine
+    /// ウィンドウ枠のトグルも、最後にアクティブだったウィンドウに向ける
+    private var frameBinding: Binding<Bool> {
+        Binding(
+            get: { state.activeWindowState?.showFrame ?? false },
+            set: { newValue in
+                state.activeWindowState?.showFrame = newValue
+                state.objectWillChange.send()
+            }
+        )
+    }
+}
 
 /// ボーダーレスでもキーウィンドウになれるウィンドウ。
 /// isKeyWindow/isMainWindow を常に true にして、非アクティブ時でも
@@ -65,43 +134,64 @@ final class ChromelessWindow: NSWindow {
     override var canBecomeMain: Bool { true }
     override var isKeyWindow: Bool { true }
     override var isMainWindow: Bool { true }
+
+    /// isKeyWindow を偽装しているため、本当のキー状態はここで追跡する
+    /// (ガラスのアクティブ外観維持の判定に使う)
+    private(set) var isActuallyKey = false
+
+    override func becomeKey() {
+        isActuallyKey = true
+        super.becomeKey()
+    }
+
+    override func resignKey() {
+        isActuallyKey = false
+        super.resignKey()
+    }
 }
 
-/// タイトルバーも枠も一切ない完全透過ウィンドウを自前で生成する。
-/// SwiftUI 管理のウィンドウは後から styleMask を borderless に変更できない
-/// (例外でクラッシュする)ため、最初からボーダーレスで作る。
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var window: ChromelessWindow?
+/// 1つのガラスウィンドウ(ウィンドウ本体 + 状態 + 枠切り替え)を管理する
+@MainActor
+final class GlassWindowController: NSObject, NSWindowDelegate {
+    let window: ChromelessWindow
+    let state: WindowGlassState
+    var onClose: ((GlassWindowController) -> Void)?
     private var cancellables = Set<AnyCancellable>()
-    private var clickMonitor: Any?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        let window = ChromelessWindow(
+    init(selection: MaskSelection, cascadeIndex: Int) {
+        state = WindowGlassState(selection: selection)
+        window = ChromelessWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
             styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
+        super.init()
+
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        // UI はメニューバーに移したため、ウィンドウ内のドラッグは
-        // すべてウィンドウ移動として扱ってよい
         window.isMovableByWindowBackground = true
-        // 非アクティブ時もガラスがアクティブ外観(Liquid Glass)を維持するようにする
+        window.isReleasedWhenClosed = false
+        window.level = AppState.shared.alwaysOnTop ? .floating : .normal
+        window.delegate = self
+
         let hostingView = NSHostingView(
-            rootView: ContentView().environment(\.controlActiveState, .key)
+            rootView: ContentView(windowState: state).environment(\.controlActiveState, .key)
         )
-        // SwiftUI の固有サイズでウィンドウが縮まないようにする
         hostingView.sizingOptions = []
         window.contentView = hostingView
         window.setContentSize(NSSize(width: 900, height: 700))
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        self.window = window
-        NSApp.activate(ignoringOtherApps: true)
+        if cascadeIndex > 0 {
+            let offset = CGFloat(cascadeIndex % 8) * 40
+            window.setFrameOrigin(NSPoint(
+                x: window.frame.origin.x + offset,
+                y: window.frame.origin.y - offset
+            ))
+        }
 
-        AppState.shared.$showWindowFrame
+        state.$showFrame
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] show in
@@ -109,33 +199,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        AppState.shared.$alwaysOnTop
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] onTop in
-                self?.window?.level = onTop ? .floating : .normal
-            }
-            .store(in: &cancellables)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKeyNotification),
+            name: NSWindow.didBecomeKeyNotification,
+            object: window
+        )
 
-        // ダブルクリックの検知はイベント配送を妨げないローカルモニタで行う。
-        // (sendEvent 内でウィンドウを再構成するとイベント処理が壊れるため)
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
-            if event.clickCount == 2, event.window === self?.window {
-                DispatchQueue.main.async {
-                    AppState.shared.showWindowFrame.toggle()
-                }
-            }
-            return event
-        }
+        window.makeKeyAndOrderFront(nil)
+        AppState.shared.setActive(state)
     }
 
-    /// ウィンドウ枠(タイトルバー)の表示/非表示を切り替える。
-    /// 自前生成のウィンドウなので styleMask を動的に変更できる
+    @objc private func windowDidBecomeKeyNotification() {
+        AppState.shared.setActive(state)
+    }
+
     private func applyWindowFrame(_ show: Bool) {
-        guard let window else { return }
         if show {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            // 透明タイトルバーだと枠が見えないため、通常の不透明なタイトルバーを出す
             window.titleVisibility = .visible
             window.titlebarAppearsTransparent = false
             window.title = "Liquid Glass Mask"
@@ -145,6 +226,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.hasShadow = false
         }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?(self)
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static private(set) var shared: AppDelegate?
+
+    private var controllers: [GlassWindowController] = []
+    private var cancellables = Set<AnyCancellable>()
+    private var clickMonitor: Any?
+
+    override init() {
+        super.init()
+        Self.shared = self
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        newWindow()
+        NSApp.activate(ignoringOtherApps: true)
+
+        AppState.shared.$alwaysOnTop
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] onTop in
+                for controller in self?.controllers ?? [] {
+                    controller.window.level = onTop ? .floating : .normal
+                }
+            }
+            .store(in: &cancellables)
+
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
+            if event.clickCount == 2,
+               let controller = self?.controllers.first(where: { $0.window === event.window }) {
+                DispatchQueue.main.async {
+                    controller.state.showFrame.toggle()
+                }
+            }
+            return event
+        }
+    }
+
+    func newWindow() {
+        let controller = GlassWindowController(
+            selection: AppState.shared.lastSelection,
+            cascadeIndex: controllers.count
+        )
+        controller.onClose = { [weak self] closed in
+            self?.controllers.removeAll { $0 === closed }
+        }
+        controllers.append(controller)
+    }
+
+    func closeActiveWindow() {
+        guard let active = AppState.shared.activeWindowState,
+              let controller = controllers.first(where: { $0.state === active }) else { return }
+        controller.window.close()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

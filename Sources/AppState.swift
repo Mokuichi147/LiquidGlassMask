@@ -1,5 +1,7 @@
 import SwiftUI
+import AppKit
 import ImageIO
+import UniformTypeIdentifiers
 
 /// 現在選択中のマスク(サンプル形状 or ユーザーが追加した画像)
 enum MaskSelection: Codable, Hashable {
@@ -14,14 +16,26 @@ struct CustomMask: Codable, Identifiable, Hashable {
     var fileName: String
 }
 
-/// メニューバーとビューの間で共有する設定(UserDefaults に永続化される)
+/// 1ウィンドウ分の状態(形状選択・枠表示)
+@MainActor
+final class WindowGlassState: ObservableObject, Identifiable {
+    nonisolated let id = UUID()
+
+    @Published var selection: MaskSelection {
+        didSet { AppState.shared.noteSelectionChanged(selection) }
+    }
+    @Published var showFrame = false
+
+    init(selection: MaskSelection) {
+        self.selection = selection
+    }
+}
+
+/// 全ウィンドウ共通の設定(UserDefaults に永続化される)
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
 
-    @Published var selection: MaskSelection {
-        didSet { Self.saveCodable(selection, key: "selection") }
-    }
     @Published var customMasks: [CustomMask] {
         didSet { Self.saveCodable(customMasks, key: "customMasks") }
     }
@@ -41,8 +55,11 @@ final class AppState: ObservableObject {
     @Published var glassOpacity: Double {
         didSet { UserDefaults.standard.set(glassOpacity, forKey: "glassOpacity") }
     }
-    @Published var showFileImporter = false
-    @Published var showWindowFrame = false
+
+    /// メニュー操作の対象になる、最後にアクティブだったウィンドウの状態
+    @Published private(set) var activeWindowState: WindowGlassState?
+    /// 最後に選択された形状(新規ウィンドウの初期値・次回起動時の復元に使う)
+    private(set) var lastSelection: MaskSelection
 
     private init() {
         let defaults = UserDefaults.standard
@@ -51,15 +68,28 @@ final class AppState: ObservableObject {
         let saved = Self.loadCodable(MaskSelection.self, key: "selection") ?? .sample(.star)
         // 保存されていたカスタム画像が消えていたらデフォルトに戻す
         if case .custom(let id) = saved, !masks.contains(where: { $0.id == id }) {
-            selection = .sample(.star)
+            lastSelection = .sample(.star)
         } else {
-            selection = saved
+            lastSelection = saved
         }
         useClearGlass = defaults.object(forKey: "useClearGlass") as? Bool ?? true
         removeRim = defaults.object(forKey: "removeRim") as? Bool ?? true
         alwaysOnTop = defaults.object(forKey: "alwaysOnTop") as? Bool ?? false
         refractionScale = defaults.object(forKey: "refractionScale") as? Double ?? 0.35
         glassOpacity = defaults.object(forKey: "glassOpacity") as? Double ?? 1.0
+    }
+
+    // MARK: - ウィンドウ状態の管理
+
+    func setActive(_ windowState: WindowGlassState) {
+        activeWindowState = windowState
+    }
+
+    func noteSelectionChanged(_ selection: MaskSelection) {
+        lastSelection = selection
+        Self.saveCodable(selection, key: "selection")
+        // メニューのチェックマークを更新させる
+        objectWillChange.send()
     }
 
     // MARK: - カスタムマスク画像の管理
@@ -73,10 +103,17 @@ final class AppState: ObservableObject {
         return base
     }
 
-    /// 選択された画像ファイルをコピーして形状リストに追加し、選択状態にする
+    /// ファイル選択ダイアログを開いてマスク画像を追加する
+    func pickAndAddCustomMask() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addCustomMask(from: url)
+    }
+
+    /// 画像ファイルをコピーして形状リストに追加し、アクティブなウィンドウで選択する
     func addCustomMask(from url: URL) {
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
 
         let id = UUID()
@@ -91,7 +128,7 @@ final class AppState: ObservableObject {
             fileName: fileName
         )
         customMasks.append(mask)
-        selection = .custom(id)
+        activeWindowState?.selection = .custom(id)
     }
 
     /// 保存済みのカスタムマスク画像を読み込む
@@ -100,6 +137,19 @@ final class AppState: ObservableObject {
         let url = Self.masksDirectory.appendingPathComponent(mask.fileName)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    /// カスタムマスク画像を削除する
+    func removeCustomMask(id: UUID) {
+        guard let index = customMasks.firstIndex(where: { $0.id == id }) else { return }
+        let mask = customMasks[index]
+        let url = Self.masksDirectory.appendingPathComponent(mask.fileName)
+        try? FileManager.default.removeItem(at: url)
+        customMasks.remove(at: index)
+        // アクティブなウィンドウが削除中の画像を選択中ならデフォルトに戻す
+        if activeWindowState?.selection == .custom(id) {
+            activeWindowState?.selection = .sample(.star)
+        }
     }
 
     // MARK: - 永続化ヘルパー

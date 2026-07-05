@@ -59,9 +59,15 @@ final class GlassFilmRemoverView: NSView {
     private var savedFilterValues: [ObjectIdentifier: [String: Any]] = [:]
     private static let pinnedKeys = ["inputOuterRefractionAmount", "inputBlurRadius"]
 
+    /// このビューが属するウィンドウが本当にキーかどうか。
+    /// (アプリ非アクティブ時や、複数ウィンドウで非キーのときに false になる)
+    private var isWindowTrulyActive: Bool {
+        (window as? ChromelessWindow)?.isActuallyKey ?? NSApp.isActive
+    }
+
     private func pinActiveAppearance(of layer: CALayer, filter: NSObject) {
         let id = ObjectIdentifier(layer)
-        if NSApp.isActive {
+        if isWindowTrulyActive {
             var values: [String: Any] = [:]
             for key in Self.pinnedKeys {
                 values[key] = filter.value(forKey: key)
