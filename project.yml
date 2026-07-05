@@ -1,0 +1,37 @@
+name: LiquidGlassMask
+options:
+  bundleIdPrefix: com.mokuichi147
+targets:
+  LiquidGlassMask:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources
+    info:
+      path: Support/Info-iOS.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: false
+  LiquidGlassMaskMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources
+    info:
+      path: Support/Info-macOS.plist
+      properties:
+        NSHighResolutionCapable: true
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
