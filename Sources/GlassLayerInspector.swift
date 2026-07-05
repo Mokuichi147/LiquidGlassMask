@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 import AppKit
 import QuartzCore
@@ -178,4 +177,3 @@ final class GlassFilmRemoverView: NSView {
     }
 
 }
-#endif

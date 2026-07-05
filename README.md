@@ -1,6 +1,6 @@
 # LiquidGlassMask
 
-Apple の Liquid Glass(macOS/iOS 26 の `glassEffect`)を、任意の形状のマスク画像でデスクトップに表示する macOS アプリ。
+Apple の Liquid Glass(macOS 26 の `glassEffect`)を、任意の形状のマスク画像でデスクトップに表示する macOS アプリ。
 
 黒背景に白い形状のマスク画像を読み込むと、その形どおりの本物の Liquid Glass(屈折・ぼかし・縁のハイライト)が、完全透過のボーダーレスウィンドウとしてデスクトップに浮かびます。
 
@@ -55,11 +55,9 @@ glassEffect が生成する私有レイヤー構造(`CABackdropLayer` + `glassBa
 
 ```sh
 xcodegen generate
-xcodebuild -project LiquidGlassMask.xcodeproj -scheme LiquidGlassMaskMac \
+xcodebuild -project LiquidGlassMask.xcodeproj -scheme LiquidGlassMask \
   -destination 'platform=macOS,arch=arm64' build
 ```
-
-iOS 用ターゲット `LiquidGlassMask` も同じソースからビルド可能(実行には iOS 26 以降が必要)。
 
 ## ライセンス
 

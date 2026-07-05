@@ -2,13 +2,10 @@ import SwiftUI
 
 @main
 struct LiquidGlassMaskApp: App {
-    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    #endif
     @ObservedObject private var state = AppState.shared
 
     var body: some Scene {
-        #if os(macOS)
         // ウィンドウは AppDelegate が自前で作るため、ここではウィンドウを作らない
         Settings {
             EmptyView()
@@ -54,15 +51,9 @@ struct LiquidGlassMaskApp: App {
                 Toggle("最前面に固定", isOn: $state.alwaysOnTop)
             }
         }
-        #else
-        WindowGroup {
-            ContentView()
-        }
-        #endif
     }
 }
 
-#if os(macOS)
 import AppKit
 import Combine
 
@@ -160,4 +151,3 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 }
-#endif

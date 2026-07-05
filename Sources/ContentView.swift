@@ -35,10 +35,8 @@ struct ContentView: View {
                 glassView(maskPath: maskPath, size: glassSize)
             }
 
-            #if os(macOS)
             GlassFilmRemover(removeRim: state.removeRim, refractionScale: state.refractionScale)
                 .frame(width: 1, height: 1)
-            #endif
         }
         .task {
             // ビューが作り直されたときも現在の選択マスクを復元する
